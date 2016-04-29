@@ -5,6 +5,7 @@ using System.Data;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -43,7 +44,7 @@ namespace BambooParser
 
     internal class LogParser
     {
-        private readonly string _fileName;
+        private string _fileName;
         private readonly Action<string> _writeText;
 
         public LogParser(string fileName, Action<string> writeText)
@@ -60,34 +61,66 @@ namespace BambooParser
 
         private void ParseImpl()
         {
-            if (!File.Exists(_fileName))
+            bool isURL = false;
+            Uri uriResult;
+            try
             {
-                _writeText(string.Format("File {0} was not found", _fileName));
-            }
-            DateTime? lastDate = null;
-            string lastLine = null;
-            foreach (var line in File.ReadAllLines(_fileName))
-            {
-                try
+                if (Uri.TryCreate(_fileName, UriKind.Absolute, out uriResult)
+                    && uriResult.Scheme == Uri.UriSchemeHttp)
                 {
-                    var parsed = line.Split('\t');
-                    var date = DateTime.Parse(parsed[1]);
-                    if (lastDate == null)
+                    isURL = true;
+                    using (WebClient client = new WebClient())
                     {
+                        var tempFileName = Path.Combine(
+                            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                            string.Format("{0}.log", Guid.NewGuid()));
+                        _writeText(string.Format("Downloading {0}", _fileName));
+                        client.DownloadFile(_fileName, tempFileName);
+                        _fileName = tempFileName;
+                    }
+                }
+
+                if (!File.Exists(_fileName))
+                {
+                    _writeText(string.Format("File {0} was not found", _fileName));
+                }
+                DateTime? lastDate = null;
+                string lastLine = null;
+                foreach (var line in File.ReadAllLines(_fileName))
+                {
+                    try
+                    {
+                        var parsed = line.Split('\t');
+                        var date = DateTime.Parse(parsed[1]);
+                        if (lastDate == null)
+                        {
+                            lastDate = date;
+                        }
+                        var sinceLast = date - lastDate.Value;
+                        if (sinceLast.TotalSeconds > 9)
+                        {
+                            _writeText(lastLine);
+                            _writeText(string.Format("Took {0} MS", sinceLast.TotalMilliseconds));
+                        }
+                        lastLine = line;
                         lastDate = date;
                     }
-                    var sinceLast = date - lastDate.Value;
-                    if (sinceLast.TotalSeconds > 9)
+                    catch (Exception e)
                     {
-                        _writeText(lastLine);
-                        _writeText(string.Format("Took {0} MS", sinceLast.TotalMilliseconds));
+                        _writeText(string.Format("Error Parsing : {0}", e.Message));
                     }
-                    lastLine = line;
-                    lastDate = date;
                 }
-                catch (Exception e)
+            }
+            catch (Exception e)
+            {
+                _writeText(string.Format("Error : {0}", e.Message));
+            }
+            finally
+            {
+                if (isURL && File.Exists(_fileName))
                 {
-                    Console.WriteLine(e);
+                    _writeText("Cleaning Downloaded File");
+                    File.Delete(_fileName);
                 }
             }
         }
